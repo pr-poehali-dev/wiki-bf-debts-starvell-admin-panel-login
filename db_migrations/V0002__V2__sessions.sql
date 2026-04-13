@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS t_p77368943_wiki_bf_debts_starve.sessions (id SERIAL PRIMARY KEY, user_id INTEGER, token VARCHAR(255) UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT NOW(), expires_at TIMESTAMP NOT NULL);

@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS t_p77368943_wiki_bf_debts_starve.users (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, display_name VARCHAR(100), role VARCHAR(20) NOT NULL DEFAULT 'user', avatar_emoji VARCHAR(10) DEFAULT '👤', created_at TIMESTAMP DEFAULT NOW(), last_login TIMESTAMP, is_banned BOOLEAN DEFAULT FALSE, ban_reason TEXT);

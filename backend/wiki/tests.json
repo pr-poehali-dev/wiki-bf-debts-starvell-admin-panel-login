@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "Get all wiki articles",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 200,
+      "expectedBody": {"articles": []},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

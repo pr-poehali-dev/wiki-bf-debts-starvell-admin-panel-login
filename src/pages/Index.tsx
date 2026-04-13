@@ -1,63 +1,199 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Icon from "@/components/ui/icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  apiLogin, apiRegister, apiMe, apiLogout,
+  apiGetWiki, apiGetUsers, apiSetRole, apiBanUser, apiUnbanUser,
+} from "@/lib/api";
 
+// ─── Types ───────────────────────────────────────────────────────────────────
 type Section = "home" | "debts" | "profile" | "admin" | "contacts" | "wiki";
+type Role = "user" | "moderator" | "admin" | "superadmin" | "owner";
 
-const navItems: { id: Section; label: string; icon: string }[] = [
-  { id: "home", label: "Главная", icon: "Home" },
-  { id: "debts", label: "Долги", icon: "CreditCard" },
-  { id: "profile", label: "Профиль", icon: "User" },
-  { id: "admin", label: "Админ", icon: "Shield" },
-  { id: "contacts", label: "Контакты", icon: "MessageCircle" },
-  { id: "wiki", label: "База знаний", icon: "BookOpen" },
+interface User {
+  id: number;
+  username: string;
+  display_name: string;
+  role: Role;
+  avatar_emoji: string;
+  is_banned?: boolean;
+  ban_reason?: string;
+  created_at?: string;
+  last_login?: string;
+}
+
+interface WikiArticle {
+  id: number;
+  slug: string;
+  title: string;
+  category: string;
+  icon: string;
+  rarity: string;
+  beli_price: number;
+  robux_price: number;
+  fragment_price: number;
+  description: string;
+  is_published: boolean;
+  views: number;
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+const ROLE_HIERARCHY: Record<Role, number> = { user: 0, moderator: 1, admin: 2, superadmin: 3, owner: 4 };
+
+const ROLE_META: Record<string, { label: string; color: string; emoji: string }> = {
+  owner:      { label: "Владелец",    color: "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",   emoji: "👑" },
+  superadmin: { label: "Суперадмин",  color: "bg-red-500/20 text-red-400 border-red-500/30",             emoji: "🔴" },
+  admin:      { label: "Админ",       color: "bg-purple-500/20 text-purple-400 border-purple-500/30",    emoji: "🛡️" },
+  moderator:  { label: "Модератор",   color: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",          emoji: "🔵" },
+  user:       { label: "Пользователь",color: "bg-gray-500/20 text-gray-400 border-gray-500/30",          emoji: "👤" },
+};
+
+const RARITY_META: Record<string, { label: string; color: string; glow: string }> = {
+  mythical:  { label: "Мифический",  color: "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",   glow: "rgba(234,179,8,0.3)" },
+  legendary: { label: "Легендарный", color: "bg-orange-500/20 text-orange-300 border-orange-500/30",   glow: "rgba(249,115,22,0.3)" },
+  epic:      { label: "Эпический",   color: "bg-purple-500/20 text-purple-400 border-purple-500/30",   glow: "rgba(168,85,247,0.3)" },
+  rare:      { label: "Редкий",      color: "bg-blue-500/20 text-blue-400 border-blue-500/30",         glow: "rgba(59,130,246,0.2)" },
+  uncommon:  { label: "Необычный",   color: "bg-green-500/20 text-green-400 border-green-500/30",      glow: "rgba(34,197,94,0.2)" },
+  common:    { label: "Обычный",     color: "bg-gray-500/20 text-gray-400 border-gray-500/30",         glow: "rgba(156,163,175,0.1)" },
+};
+
+const navItems: { id: Section; label: string; icon: string; minRole?: Role }[] = [
+  { id: "home",     label: "Главная",     icon: "Home" },
+  { id: "wiki",     label: "Blox Fruits", icon: "BookOpen" },
+  { id: "debts",    label: "Долги",       icon: "CreditCard" },
+  { id: "profile",  label: "Профиль",     icon: "User" },
+  { id: "admin",    label: "Управление",  icon: "Shield",    minRole: "moderator" },
+  { id: "contacts", label: "Контакты",    icon: "MessageCircle" },
 ];
 
-const debts = [
-  { id: 1, name: "Алексей Морозов", amount: 45000, due: "2026-04-20", status: "overdue", type: "outgoing" },
-  { id: 2, name: "ООО «Старт»", amount: 120000, due: "2026-04-28", status: "urgent", type: "incoming" },
-  { id: 3, name: "Мария Иванова", amount: 8500, due: "2026-05-10", status: "ok", type: "outgoing" },
-  { id: 4, name: "Иван Петров", amount: 31000, due: "2026-05-15", status: "ok", type: "incoming" },
-  { id: 5, name: "Сергей Кузнецов", amount: 67000, due: "2026-04-22", status: "overdue", type: "incoming" },
-];
+// ─── Login Screen ─────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin }: { onLogin: (user: User, token: string) => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-const articles = [
-  { title: "Как правильно оформить долговую расписку", category: "Юридические вопросы", reads: 1240 },
-  { title: "Сроки исковой давности по долгам", category: "Законодательство", reads: 890 },
-  { title: "Реструктуризация долгов: пошаговый гид", category: "Финансы", reads: 654 },
-  { title: "Досудебное урегулирование споров", category: "Юридические вопросы", reads: 423 },
-  { title: "Как вести учёт финансовых обязательств", category: "Инструменты", reads: 1102 },
-  { title: "Налоговые аспекты прощения долга", category: "Налоги", reads: 388 },
-];
+  const submit = async () => {
+    setError("");
+    setLoading(true);
+    try {
+      const res = mode === "login"
+        ? await apiLogin(username, password)
+        : await apiRegister(username, password, displayName || username);
 
-const notifications = [
-  { text: "Долг Алексея Морозова просрочен на 3 дня", type: "error", time: "10 мин назад" },
-  { text: "Сергей Кузнецов: платёж через 2 дня", type: "warning", time: "1 час назад" },
-  { text: "ООО «Старт» погасило часть долга", type: "success", time: "3 часа назад" },
-];
+      if (res.error) { setError(res.error); return; }
+      localStorage.setItem('dw_token', res.token);
+      onLogin(res.user, res.token);
+    } catch {
+      setError("Ошибка соединения");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-function StatCard({ label, value, icon, color }: { label: string; value: string; icon: string; color: string }) {
   return (
-    <div className="glass rounded-2xl p-5 flex items-center gap-4 hover:scale-[1.02] transition-transform duration-200">
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${color}`}>
-        <Icon name={icon} size={22} />
+    <div className="min-h-screen flex items-center justify-center p-4 relative" style={{ background: "hsl(var(--background))" }}>
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full opacity-15 blur-[120px]" style={{ background: "hsl(262 83% 68%)" }} />
+        <div className="absolute bottom-[-10%] left-[-5%] w-[400px] h-[400px] rounded-full opacity-10 blur-[100px]" style={{ background: "hsl(188 95% 55%)" }} />
       </div>
-      <div>
-        <p className="text-muted-foreground text-sm font-medium">{label}</p>
-        <p className="text-foreground text-xl font-bold">{value}</p>
+
+      <div className="w-full max-w-sm relative z-10 animate-fade-in">
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-black text-3xl neon-glow mx-auto mb-4" style={{ background: "var(--gradient-main)" }}>D</div>
+          <h1 className="text-3xl font-black gradient-text">DebtWiki</h1>
+          <p className="text-muted-foreground text-sm mt-1">Система учёта · Blox Fruits вики</p>
+        </div>
+
+        <div className="glass-strong rounded-3xl p-7 gradient-border">
+          {/* Tabs */}
+          <div className="flex gap-1 glass rounded-xl p-1 mb-6">
+            {(["login", "register"] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => { setMode(m); setError(""); }}
+                className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${mode === m ? "text-white" : "text-muted-foreground"}`}
+                style={mode === m ? { background: "var(--gradient-main)" } : {}}
+              >
+                {m === "login" ? "Войти" : "Регистрация"}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-3">
+            {mode === "register" && (
+              <input
+                placeholder="Отображаемое имя"
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+                className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
+              />
+            )}
+            <input
+              placeholder="Логин"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
+            />
+            <input
+              type="password"
+              placeholder="Пароль"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submit()}
+              className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
+            />
+
+            {error && (
+              <div className="glass rounded-xl px-4 py-3 text-sm text-red-400 border border-red-500/20 flex items-center gap-2">
+                <Icon name="AlertCircle" size={14} />
+                {error}
+              </div>
+            )}
+
+            <Button
+              onClick={submit}
+              disabled={loading}
+              className="w-full rounded-xl py-6 font-bold text-base"
+              style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}
+            >
+              {loading ? <Icon name="Loader" size={18} className="animate-spin" /> : mode === "login" ? "Войти" : "Создать аккаунт"}
+            </Button>
+          </div>
+
+          {mode === "register" && (
+            <p className="text-xs text-muted-foreground text-center mt-4">
+              Первый зарегистрированный пользователь получает роль <span className="text-yellow-300">Владелца 👑</span>
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function DebtStatusBadge({ status }: { status: string }) {
-  if (status === "overdue") return <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">Просрочен</Badge>;
-  if (status === "urgent") return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">Срочно</Badge>;
-  return <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">В норме</Badge>;
+// ─── Role Badge ───────────────────────────────────────────────────────────────
+function RoleBadge({ role }: { role: string }) {
+  const meta = ROLE_META[role] || ROLE_META.user;
+  return (
+    <Badge className={`${meta.color} text-xs`}>
+      {meta.emoji} {meta.label}
+    </Badge>
+  );
 }
 
-function HomeSection() {
+// ─── Home Section ─────────────────────────────────────────────────────────────
+function HomeSection({ me, setSection }: { me: User; setSection: (s: Section) => void }) {
+  const notifications = [
+    { text: "Добро пожаловать в DebtWiki!", type: "success", time: "сейчас" },
+    { text: "Проверьте раздел Blox Fruits — 15 фруктов в базе", type: "info", time: "1 мин назад" },
+    { text: "Для управления пользователями нужна роль Модератора+", type: "warning", time: "2 мин назад" },
+  ];
+
   return (
     <div className="animate-fade-in space-y-10">
       <div className="relative rounded-3xl overflow-hidden p-10 noise-bg" style={{ background: "var(--gradient-hero)" }}>
@@ -66,7 +202,7 @@ function HomeSection() {
         <div className="relative z-10">
           <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-2 mb-6">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-sm text-muted-foreground">Система активна</span>
+            <span className="text-sm text-muted-foreground">Система активна · {me.display_name}</span>
           </div>
           <h1 className="text-5xl font-black mb-4 leading-tight">
             <span className="gradient-text">DebtWiki</span>
@@ -74,38 +210,47 @@ function HomeSection() {
             <span className="text-foreground">Учёт обязательств</span>
           </h1>
           <p className="text-muted-foreground text-lg max-w-xl mb-8">
-            Финансовая вики-система для управления долгами, отслеживания платежей и контроля финансовых обязательств.
+            Вики Blox Fruits, управление долгами и финансовыми обязательствами в одном месте.
           </p>
           <div className="flex gap-3 flex-wrap">
-            <Button className="rounded-xl px-6" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
-              <Icon name="Plus" size={16} className="mr-2" />
-              Добавить долг
+            <Button onClick={() => setSection("wiki")} className="rounded-xl px-6" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
+              <Icon name="BookOpen" size={16} className="mr-2" />
+              Blox Fruits вики
             </Button>
-            <Button variant="outline" className="rounded-xl px-6 glass border-white/10 text-foreground hover:bg-white/5">
-              <Icon name="FileText" size={16} className="mr-2" />
-              База знаний
+            <Button onClick={() => setSection("debts")} variant="outline" className="rounded-xl px-6 glass border-white/10 text-foreground hover:bg-white/5">
+              <Icon name="CreditCard" size={16} className="mr-2" />
+              Долги
             </Button>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Активных долгов" value="24" icon="CreditCard" color="bg-purple-500/20 text-purple-400" />
-        <StatCard label="Просрочено" value="3" icon="AlertTriangle" color="bg-red-500/20 text-red-400" />
-        <StatCard label="К получению" value="₽ 218к" icon="TrendingUp" color="bg-cyan-500/20 text-cyan-400" />
-        <StatCard label="Выплачено" value="₽ 94к" icon="CheckCircle" color="bg-emerald-500/20 text-emerald-400" />
+        {[
+          { label: "Ваша роль", value: ROLE_META[me.role]?.label || me.role, icon: "Shield", color: "bg-purple-500/20 text-purple-400" },
+          { label: "Просрочено", value: "3", icon: "AlertTriangle", color: "bg-red-500/20 text-red-400" },
+          { label: "К получению", value: "₽ 218к", icon: "TrendingUp", color: "bg-cyan-500/20 text-cyan-400" },
+          { label: "Фруктов в вики", value: "15", icon: "BookOpen", color: "bg-emerald-500/20 text-emerald-400" },
+        ].map((s, i) => (
+          <div key={i} className="glass rounded-2xl p-5 flex items-center gap-4 hover:scale-[1.02] transition-transform duration-200">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${s.color}`}>
+              <Icon name={s.icon} size={22} />
+            </div>
+            <div>
+              <p className="text-muted-foreground text-sm font-medium">{s.label}</p>
+              <p className="text-foreground text-xl font-bold">{s.value}</p>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div>
         <h2 className="text-xl font-bold mb-4">Уведомления</h2>
         <div className="space-y-3">
           {notifications.map((n, i) => (
-            <div key={i} className={`glass rounded-xl p-4 flex items-start gap-4 border-l-2 ${n.type === "error" ? "border-l-red-500" : n.type === "warning" ? "border-l-yellow-500" : "border-l-emerald-500"}`}>
-              <Icon
-                name={n.type === "error" ? "XCircle" : n.type === "warning" ? "Clock" : "CheckCircle"}
-                size={18}
-                className={`mt-0.5 shrink-0 ${n.type === "error" ? "text-red-400" : n.type === "warning" ? "text-yellow-400" : "text-emerald-400"}`}
-              />
+            <div key={i} className={`glass rounded-xl p-4 flex items-start gap-4 border-l-2 ${n.type === "success" ? "border-l-emerald-500" : n.type === "warning" ? "border-l-yellow-500" : "border-l-cyan-500"}`}>
+              <Icon name={n.type === "success" ? "CheckCircle" : n.type === "warning" ? "Clock" : "Info"} size={18}
+                className={`mt-0.5 shrink-0 ${n.type === "success" ? "text-emerald-400" : n.type === "warning" ? "text-yellow-400" : "text-cyan-400"}`} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-foreground">{n.text}</p>
                 <p className="text-xs text-muted-foreground mt-1">{n.time}</p>
@@ -114,71 +259,248 @@ function HomeSection() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div>
-        <h2 className="text-xl font-bold mb-4">Быстрый доступ</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          {[
-            { icon: "FilePlus", label: "Новый долг", color: "text-purple-400" },
-            { icon: "Send", label: "Напомнить должнику", color: "text-cyan-400" },
-            { icon: "BarChart3", label: "Отчёт за месяц", color: "text-pink-400" },
-            { icon: "Users", label: "Все контрагенты", color: "text-yellow-400" },
-            { icon: "Calendar", label: "График платежей", color: "text-emerald-400" },
-            { icon: "Download", label: "Экспорт данных", color: "text-blue-400" },
-          ].map((item, i) => (
-            <button key={i} className="glass rounded-2xl p-5 flex flex-col items-center gap-3 hover:bg-white/5 transition-all duration-200 hover:scale-[1.03] cursor-pointer text-center">
-              <Icon name={item.icon} size={24} className={item.color} />
-              <span className="text-sm font-medium text-foreground">{item.label}</span>
+// ─── Wiki Section (Blox Fruits) ───────────────────────────────────────────────
+function WikiSection({ me }: { me: User }) {
+  const [articles, setArticles] = useState<WikiArticle[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [filterRarity, setFilterRarity] = useState("");
+  const [selected, setSelected] = useState<WikiArticle | null>(null);
+
+  const canEdit = ROLE_HIERARCHY[me.role] >= 1;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await apiGetWiki({ search: search || undefined });
+    if (res.articles) setArticles(res.articles);
+    setLoading(false);
+  }, [search]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = filterRarity ? articles.filter(a => a.rarity === filterRarity) : articles;
+  const rarities = ["mythical", "legendary", "epic", "rare", "uncommon", "common"];
+
+  return (
+    <div className="animate-fade-in space-y-6">
+      {selected ? (
+        <ArticleDetail article={selected} onBack={() => setSelected(null)} canEdit={canEdit} onUpdate={load} />
+      ) : (
+        <>
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h1 className="text-3xl font-black">
+                Blox Fruits <span className="gradient-text">Wiki</span>
+              </h1>
+              <p className="text-muted-foreground mt-1">Devil Fruits · {articles.length} записей</p>
+            </div>
+            {canEdit && (
+              <Button className="rounded-xl" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
+                <Icon name="Plus" size={16} className="mr-2" />
+                Добавить фрукт
+              </Button>
+            )}
+          </div>
+
+          <div className="relative">
+            <Icon name="Search" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Поиск по фруктам..."
+              className="w-full glass-strong rounded-2xl pl-11 pr-4 py-4 text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
+            />
+          </div>
+
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => setFilterRarity("")}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${!filterRarity ? "text-white neon-glow" : "glass text-muted-foreground hover:text-foreground"}`}
+              style={!filterRarity ? { background: "var(--gradient-main)" } : {}}
+            >
+              Все
             </button>
-          ))}
+            {rarities.map(r => {
+              const meta = RARITY_META[r];
+              return (
+                <button
+                  key={r}
+                  onClick={() => setFilterRarity(r === filterRarity ? "" : r)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${filterRarity === r ? meta.color : "glass text-muted-foreground hover:text-foreground border-white/5"}`}
+                >
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {loading ? (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="glass rounded-2xl p-5 animate-pulse h-40" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filtered.map(a => {
+                const rarity = RARITY_META[a.rarity] || RARITY_META.common;
+                return (
+                  <div
+                    key={a.id}
+                    onClick={() => setSelected(a)}
+                    className="glass rounded-2xl p-5 hover:bg-white/5 transition-all duration-200 hover:scale-[1.02] cursor-pointer group"
+                    style={{ boxShadow: `0 0 20px ${rarity.glow}` }}
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-4xl">{a.icon}</span>
+                      <Badge className={`${rarity.color} text-xs`}>{rarity.label}</Badge>
+                    </div>
+                    <h3 className="font-bold text-foreground text-lg group-hover:gradient-text transition-colors">{a.title}</h3>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{a.description}</p>
+                    <div className="flex gap-3 mt-3 text-xs">
+                      {a.beli_price > 0 && (
+                        <span className="text-yellow-400">💰 {(a.beli_price / 1000000).toFixed(1)}M</span>
+                      )}
+                      {a.robux_price > 0 && (
+                        <span className="text-green-400">💎 {a.robux_price} R$</span>
+                      )}
+                      {a.fragment_price > 0 && (
+                        <span className="text-cyan-400">🔮 {a.fragment_price}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {filtered.length === 0 && (
+                <div className="col-span-3 text-center py-12 text-muted-foreground">
+                  <p className="text-4xl mb-3">🍈</p>
+                  <p>Фрукты не найдены</p>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Article Detail ───────────────────────────────────────────────────────────
+function ArticleDetail({ article, onBack, canEdit, onUpdate }: { article: WikiArticle; onBack: () => void; canEdit: boolean; onUpdate: () => void }) {
+  const rarity = RARITY_META[article.rarity] || RARITY_META.common;
+  const abilities = article.abilities ? (article as WikiArticle & { abilities: string }).abilities.split(', ') : [];
+
+  return (
+    <div className="animate-fade-in space-y-6">
+      <button onClick={onBack} className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors">
+        <Icon name="ArrowLeft" size={16} />
+        <span className="text-sm">Назад к списку</span>
+      </button>
+
+      <div className="glass-strong rounded-3xl p-8 gradient-border" style={{ boxShadow: `0 0 60px ${rarity.glow}` }}>
+        <div className="flex items-start gap-6 flex-wrap">
+          <div className="text-7xl">{article.icon}</div>
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-2">
+              <h1 className="text-4xl font-black gradient-text">{article.title}</h1>
+              <Badge className={`${rarity.color}`}>{rarity.label}</Badge>
+            </div>
+            <p className="text-muted-foreground text-sm mb-1">{article.category}</p>
+            <p className="text-foreground mt-3 leading-relaxed">{article.description}</p>
+
+            <div className="flex gap-4 mt-4 flex-wrap">
+              {article.beli_price > 0 && (
+                <div className="glass rounded-xl px-4 py-2 text-sm">
+                  <span className="text-muted-foreground">Beli: </span>
+                  <span className="text-yellow-400 font-bold">{article.beli_price.toLocaleString('ru-RU')}</span>
+                </div>
+              )}
+              {article.robux_price > 0 && (
+                <div className="glass rounded-xl px-4 py-2 text-sm">
+                  <span className="text-muted-foreground">Robux: </span>
+                  <span className="text-green-400 font-bold">{article.robux_price} R$</span>
+                </div>
+              )}
+              {article.fragment_price > 0 && (
+                <div className="glass rounded-xl px-4 py-2 text-sm">
+                  <span className="text-muted-foreground">Фрагменты: </span>
+                  <span className="text-cyan-400 font-bold">{article.fragment_price}</span>
+                </div>
+              )}
+              {article.beli_price === 0 && article.robux_price === 0 && (
+                <div className="glass rounded-xl px-4 py-2 text-sm text-muted-foreground">Не продаётся в магазине</div>
+              )}
+            </div>
+          </div>
         </div>
+      </div>
+
+      {abilities.length > 0 && (
+        <div>
+          <h2 className="text-xl font-bold mb-4">Способности</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {abilities.map((ab, i) => (
+              <div key={i} className="glass rounded-xl p-4 text-center hover:bg-white/5 transition-all">
+                <div className="text-2xl mb-2">⚡</div>
+                <p className="text-sm font-medium text-foreground">{ab.trim()}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Icon name="Eye" size={12} />
+        <span>{article.views} просмотров</span>
       </div>
     </div>
   );
 }
 
+// ─── Debts Section ────────────────────────────────────────────────────────────
+const DEBTS = [
+  { id: 1, name: "Алексей Морозов", amount: 45000, due: "2026-04-20", status: "overdue", type: "outgoing" },
+  { id: 2, name: "ООО «Старт»", amount: 120000, due: "2026-04-28", status: "urgent", type: "incoming" },
+  { id: 3, name: "Мария Иванова", amount: 8500, due: "2026-05-10", status: "ok", type: "outgoing" },
+  { id: 4, name: "Иван Петров", amount: 31000, due: "2026-05-15", status: "ok", type: "incoming" },
+  { id: 5, name: "Сергей Кузнецов", amount: 67000, due: "2026-04-22", status: "overdue", type: "incoming" },
+];
+
+function DebtStatusBadge({ status }: { status: string }) {
+  if (status === "overdue") return <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">Просрочен</Badge>;
+  if (status === "urgent") return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">Срочно</Badge>;
+  return <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">В норме</Badge>;
+}
+
 function DebtsSection() {
   const [filter, setFilter] = useState<"all" | "incoming" | "outgoing">("all");
-  const filtered = debts.filter(d => filter === "all" || d.type === filter);
+  const filtered = DEBTS.filter(d => filter === "all" || d.type === filter);
 
   return (
     <div className="animate-fade-in space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-3xl font-black">
-            Управление <span className="gradient-text">долгами</span>
-          </h1>
+          <h1 className="text-3xl font-black">Управление <span className="gradient-text">долгами</span></h1>
           <p className="text-muted-foreground mt-1">Учёт финансовых обязательств</p>
         </div>
         <Button className="rounded-xl" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
-          <Icon name="Plus" size={16} className="mr-2" />
-          Добавить
+          <Icon name="Plus" size={16} className="mr-2" />Добавить
         </Button>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <div className="glass rounded-2xl p-4 text-center">
-          <p className="text-2xl font-black text-red-400">₽ 112к</p>
-          <p className="text-xs text-muted-foreground mt-1">Мы должны</p>
-        </div>
-        <div className="glass rounded-2xl p-4 text-center">
-          <p className="text-2xl font-black gradient-text">₽ 218к</p>
-          <p className="text-xs text-muted-foreground mt-1">Нам должны</p>
-        </div>
-        <div className="glass rounded-2xl p-4 text-center">
-          <p className="text-2xl font-black text-emerald-400">+₽ 106к</p>
-          <p className="text-xs text-muted-foreground mt-1">Баланс</p>
-        </div>
+        <div className="glass rounded-2xl p-4 text-center"><p className="text-2xl font-black text-red-400">₽ 112к</p><p className="text-xs text-muted-foreground mt-1">Мы должны</p></div>
+        <div className="glass rounded-2xl p-4 text-center"><p className="text-2xl font-black gradient-text">₽ 218к</p><p className="text-xs text-muted-foreground mt-1">Нам должны</p></div>
+        <div className="glass rounded-2xl p-4 text-center"><p className="text-2xl font-black text-emerald-400">+₽ 106к</p><p className="text-xs text-muted-foreground mt-1">Баланс</p></div>
       </div>
 
       <div className="flex gap-2">
         {(["all", "incoming", "outgoing"] as const).map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${filter === f ? "text-white neon-glow" : "glass text-muted-foreground hover:text-foreground"}`}
-            style={filter === f ? { background: "var(--gradient-main)" } : {}}
-          >
+          <button key={f} onClick={() => setFilter(f)} className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${filter === f ? "text-white neon-glow" : "glass text-muted-foreground hover:text-foreground"}`} style={filter === f ? { background: "var(--gradient-main)" } : {}}>
             {{ all: "Все", incoming: "Нам должны", outgoing: "Мы должны" }[f]}
           </button>
         ))}
@@ -186,27 +508,17 @@ function DebtsSection() {
 
       <div className="space-y-3">
         {filtered.map(debt => (
-          <div key={debt.id} className="glass rounded-2xl p-5 flex items-center gap-4 hover:bg-white/5 transition-all duration-200 group">
+          <div key={debt.id} className="glass rounded-2xl p-5 flex items-center gap-4 hover:bg-white/5 transition-all group">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${debt.type === "incoming" ? "bg-cyan-500/20 text-cyan-400" : "bg-red-500/20 text-red-400"}`}>
               <Icon name={debt.type === "incoming" ? "ArrowDownLeft" : "ArrowUpRight"} size={18} />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-semibold text-foreground truncate">{debt.name}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Срок: {new Date(debt.due).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}
-              </p>
+              <p className="font-semibold truncate">{debt.name}</p>
+              <p className="text-xs text-muted-foreground">Срок: {new Date(debt.due).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</p>
             </div>
             <div className="text-right shrink-0">
-              <p className="font-bold text-foreground">{debt.amount.toLocaleString("ru-RU")} ₽</p>
+              <p className="font-bold">{debt.amount.toLocaleString("ru-RU")} ₽</p>
               <div className="mt-1"><DebtStatusBadge status={debt.status} /></div>
-            </div>
-            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button className="w-8 h-8 glass rounded-lg flex items-center justify-center text-cyan-400 hover:bg-cyan-500/10">
-                <Icon name="Send" size={14} />
-              </button>
-              <button className="w-8 h-8 glass rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/5">
-                <Icon name="MoreHorizontal" size={14} />
-              </button>
             </div>
           </div>
         ))}
@@ -215,305 +527,284 @@ function DebtsSection() {
   );
 }
 
-function ProfileSection() {
-  const history = [
-    { date: "12 апр 2026", action: "Добавлен долг", entity: "Алексей Морозов", amount: "+45 000 ₽" },
-    { date: "10 апр 2026", action: "Получена оплата", entity: "ООО «Старт»", amount: "+30 000 ₽" },
-    { date: "08 апр 2026", action: "Отправлено напоминание", entity: "Сергей Кузнецов", amount: "" },
-    { date: "05 апр 2026", action: "Закрыт долг", entity: "Анна Белова", amount: "18 500 ₽" },
-    { date: "03 апр 2026", action: "Добавлен долг", entity: "ООО «Старт»", amount: "+90 000 ₽" },
-  ];
-
+// ─── Profile Section ──────────────────────────────────────────────────────────
+function ProfileSection({ me, onLogout }: { me: User; onLogout: () => void }) {
   return (
     <div className="animate-fade-in space-y-6">
-      <h1 className="text-3xl font-black">
-        Личный <span className="gradient-text">профиль</span>
-      </h1>
+      <h1 className="text-3xl font-black">Личный <span className="gradient-text">профиль</span></h1>
 
       <div className="glass-strong rounded-3xl p-8 flex items-center gap-6 gradient-border">
         <div className="w-20 h-20 rounded-2xl flex items-center justify-center text-4xl neon-glow shrink-0" style={{ background: "var(--gradient-main)" }}>
-          👤
+          {me.avatar_emoji || "👤"}
         </div>
         <div className="flex-1">
-          <h2 className="text-2xl font-bold">Администратор</h2>
-          <p className="text-muted-foreground">admin@debtwiki.ru</p>
-          <div className="flex gap-2 mt-3 flex-wrap">
-            <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">Суперадмин</Badge>
-            <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/30">Финансист</Badge>
-          </div>
+          <h2 className="text-2xl font-bold">{me.display_name}</h2>
+          <p className="text-muted-foreground">@{me.username}</p>
+          <div className="mt-2"><RoleBadge role={me.role} /></div>
         </div>
-        <button className="glass rounded-xl p-3 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all">
-          <Icon name="Settings" size={20} />
+        <button onClick={onLogout} className="glass rounded-xl p-3 text-red-400 hover:bg-red-500/10 transition-all flex items-center gap-2 text-sm">
+          <Icon name="LogOut" size={16} />
+          Выйти
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
-        <div className="glass rounded-2xl p-4 text-center">
-          <p className="text-3xl font-black gradient-text">87</p>
-          <p className="text-xs text-muted-foreground mt-1">Операций</p>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="glass rounded-2xl p-5">
+          <p className="text-xs text-muted-foreground mb-1">ID пользователя</p>
+          <p className="font-mono text-lg font-bold gradient-text">#{me.id}</p>
         </div>
-        <div className="glass rounded-2xl p-4 text-center">
-          <p className="text-3xl font-black text-emerald-400">12</p>
-          <p className="text-xs text-muted-foreground mt-1">Закрыто долгов</p>
-        </div>
-        <div className="glass rounded-2xl p-4 text-center">
-          <p className="text-3xl font-black text-cyan-400">34</p>
-          <p className="text-xs text-muted-foreground mt-1">Контрагентов</p>
+        <div className="glass rounded-2xl p-5">
+          <p className="text-xs text-muted-foreground mb-1">Уровень доступа</p>
+          <p className="text-lg font-bold">{ROLE_META[me.role]?.emoji} {ROLE_META[me.role]?.label}</p>
         </div>
       </div>
-
-      <div>
-        <h2 className="text-xl font-bold mb-4">История действий</h2>
-        <div className="space-y-2">
-          {history.map((h, i) => (
-            <div key={i} className="glass rounded-xl p-4 flex items-center gap-4">
-              <div className="w-2 h-2 rounded-full bg-purple-400 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm text-foreground font-medium">{h.action}</p>
-                <p className="text-xs text-muted-foreground">{h.entity}</p>
-              </div>
-              {h.amount && <span className="text-sm font-semibold text-cyan-400 shrink-0">{h.amount}</span>}
-              <span className="text-xs text-muted-foreground shrink-0">{h.date}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AdminSection() {
-  const users = [
-    { name: "Александр Новиков", role: "Менеджер", status: "active", operations: 23 },
-    { name: "Елена Смирнова", role: "Финансист", status: "active", operations: 41 },
-    { name: "Дмитрий Власов", role: "Наблюдатель", status: "inactive", operations: 5 },
-  ];
-
-  return (
-    <div className="animate-fade-in space-y-6">
-      <h1 className="text-3xl font-black">
-        Панель <span className="gradient-text">администратора</span>
-      </h1>
 
       <div className="glass rounded-2xl p-5">
-        <div className="flex items-center gap-3 mb-4">
-          <Icon name="Activity" size={18} className="text-cyan-400" />
-          <span className="font-semibold">Состояние системы</span>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <h3 className="font-bold mb-3">Права доступа</h3>
+        <div className="space-y-2">
           {[
-            { label: "Сервер", value: "Онлайн", ok: true },
-            { label: "База данных", value: "Онлайн", ok: true },
-            { label: "Уведомления", value: "Активны", ok: true },
-            { label: "Бэкапы", value: "Вчера", ok: false },
-          ].map((s, i) => (
-            <div key={i} className="bg-white/3 rounded-xl p-3">
-              <p className="text-xs text-muted-foreground">{s.label}</p>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className={`w-1.5 h-1.5 rounded-full ${s.ok ? "bg-emerald-400" : "bg-yellow-400"}`} />
-                <p className="text-sm font-medium">{s.value}</p>
-              </div>
+            { label: "Просмотр вики", allowed: true },
+            { label: "Редактирование вики", allowed: ROLE_HIERARCHY[me.role] >= 1 },
+            { label: "Управление пользователями", allowed: ROLE_HIERARCHY[me.role] >= 2 },
+            { label: "Выдача ролей", allowed: ROLE_HIERARCHY[me.role] >= 2 },
+            { label: "Бан/разбан пользователей", allowed: ROLE_HIERARCHY[me.role] >= 1 },
+            { label: "Полный контроль системы", allowed: ROLE_HIERARCHY[me.role] >= 3 },
+          ].map((p, i) => (
+            <div key={i} className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">{p.label}</span>
+              <Icon name={p.allowed ? "CheckCircle" : "XCircle"} size={16} className={p.allowed ? "text-emerald-400" : "text-red-400/50"} />
             </div>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">Пользователи</h2>
-          <Button size="sm" className="rounded-xl" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
-            <Icon name="UserPlus" size={14} className="mr-2" />
-            Добавить
-          </Button>
+// ─── Admin Section ────────────────────────────────────────────────────────────
+function AdminSection({ me }: { me: User }) {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [actionUser, setActionUser] = useState<User | null>(null);
+  const [banReason, setBanReason] = useState("");
+  const [toast, setToast] = useState("");
+
+  const myLevel = ROLE_HIERARCHY[me.role];
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 3000);
+  };
+
+  const loadUsers = useCallback(async () => {
+    setLoading(true);
+    const res = await apiGetUsers();
+    if (res.users) setUsers(res.users);
+    else setError(res.error || "Ошибка загрузки");
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadUsers(); }, [loadUsers]);
+
+  const setRole = async (uid: number, role: string) => {
+    const res = await apiSetRole(uid, role);
+    if (res.ok) { showToast("Роль изменена"); loadUsers(); }
+    else showToast(res.error || "Ошибка");
+  };
+
+  const ban = async (uid: number) => {
+    const res = await apiBanUser(uid, banReason || "Нарушение правил");
+    if (res.ok) { showToast("Пользователь заблокирован"); setBanReason(""); setActionUser(null); loadUsers(); }
+    else showToast(res.error || "Ошибка");
+  };
+
+  const unban = async (uid: number) => {
+    const res = await apiUnbanUser(uid);
+    if (res.ok) { showToast("Пользователь разблокирован"); loadUsers(); }
+    else showToast(res.error || "Ошибка");
+  };
+
+  const availableRoles: Role[] = ["user", "moderator", "admin", "superadmin", "owner"].filter(
+    r => ROLE_HIERARCHY[r as Role] < myLevel
+  ) as Role[];
+
+  return (
+    <div className="animate-fade-in space-y-6 relative">
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 glass-strong rounded-xl px-4 py-3 text-sm text-foreground border border-white/10 animate-fade-in">
+          {toast}
         </div>
+      )}
+
+      <h1 className="text-3xl font-black">Управление <span className="gradient-text">пользователями</span></h1>
+
+      {error && <div className="glass rounded-xl p-4 text-red-400 text-sm border border-red-500/20">{error}</div>}
+
+      {loading ? (
         <div className="space-y-3">
-          {users.map((u, i) => (
-            <div key={i} className="glass rounded-2xl p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center font-bold shrink-0">
-                {u.name[0]}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-foreground">{u.name}</p>
-                <p className="text-xs text-muted-foreground">{u.role} · {u.operations} операций</p>
-              </div>
-              <Badge className={u.status === "active" ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-gray-500/20 text-gray-400 border-gray-500/30"}>
-                {u.status === "active" ? "Активен" : "Неактивен"}
-              </Badge>
-              <button className="glass rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-white/5">
-                <Icon name="MoreHorizontal" size={16} />
-              </button>
-            </div>
-          ))}
+          {[...Array(3)].map((_, i) => <div key={i} className="glass rounded-2xl p-4 animate-pulse h-20" />)}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-3">
+          {users.map(u => {
+            const uLevel = ROLE_HIERARCHY[u.role];
+            const canAct = myLevel > uLevel && u.id !== me.id;
+            const isExpanded = actionUser?.id === u.id;
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {[
-          { icon: "Bell", title: "Уведомления", desc: "Настройка напоминаний и сроков", color: "text-purple-400" },
-          { icon: "Database", title: "Бэкапы", desc: "Резервное копирование данных", color: "text-cyan-400" },
-          { icon: "Lock", title: "Безопасность", desc: "Роли доступа и аутентификация", color: "text-pink-400" },
-          { icon: "FileText", title: "Отчёты", desc: "Экспорт и шаблоны документов", color: "text-yellow-400" },
-        ].map((item, i) => (
-          <button key={i} className="glass rounded-2xl p-5 flex items-center gap-4 hover:bg-white/5 transition-all hover:scale-[1.02] text-left">
-            <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-              <Icon name={item.icon} size={20} className={item.color} />
-            </div>
-            <div>
-              <p className="font-semibold text-foreground">{item.title}</p>
-              <p className="text-xs text-muted-foreground">{item.desc}</p>
-            </div>
-            <Icon name="ChevronRight" size={16} className="text-muted-foreground ml-auto shrink-0" />
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+            return (
+              <div key={u.id} className={`glass rounded-2xl overflow-hidden transition-all ${u.is_banned ? "border border-red-500/20" : ""}`}>
+                <div className="p-4 flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold shrink-0 text-lg"
+                    style={{ background: "var(--gradient-main)", color: "#fff" }}>
+                    {(u.display_name || u.username)[0].toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-semibold">{u.display_name}</p>
+                      {u.id === me.id && <span className="text-xs text-muted-foreground">(вы)</span>}
+                      {u.is_banned && <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">Заблокирован</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground">@{u.username}</p>
+                  </div>
+                  <div className="shrink-0"><RoleBadge role={u.role} /></div>
+                  {canAct && (
+                    <button
+                      onClick={() => setActionUser(isExpanded ? null : u)}
+                      className="glass rounded-lg p-2 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all shrink-0"
+                    >
+                      <Icon name={isExpanded ? "ChevronUp" : "ChevronDown"} size={16} />
+                    </button>
+                  )}
+                </div>
 
-function ContactsSection() {
-  return (
-    <div className="animate-fade-in space-y-6">
-      <h1 className="text-3xl font-black">
-        Контакты и <span className="gradient-text">поддержка</span>
-      </h1>
+                {isExpanded && canAct && (
+                  <div className="border-t border-white/6 p-4 space-y-4 bg-white/2">
+                    {/* Role selector */}
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-2 font-medium">ИЗМЕНИТЬ РОЛЬ</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {availableRoles.map(r => (
+                          <button
+                            key={r}
+                            onClick={() => setRole(u.id, r)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all hover:scale-[1.05] ${u.role === r ? ROLE_META[r].color : "glass text-muted-foreground border-white/5 hover:text-foreground"}`}
+                          >
+                            {ROLE_META[r].emoji} {ROLE_META[r].label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="glass-strong rounded-3xl p-6 gradient-border">
-          <h2 className="text-xl font-bold mb-4">Написать нам</h2>
-          <div className="space-y-3">
-            <input
-              type="text"
-              placeholder="Ваше имя"
-              className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
-            />
-            <input
-              type="email"
-              placeholder="Email"
-              className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
-            />
-            <textarea
-              placeholder="Опишите вашу проблему..."
-              rows={4}
-              className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors resize-none"
-            />
-            <Button className="w-full rounded-xl" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
-              <Icon name="Send" size={16} className="mr-2" />
-              Отправить сообщение
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {[
-            { icon: "Mail", title: "Email поддержки", value: "support@debtwiki.ru", color: "text-purple-400 bg-purple-500/10" },
-            { icon: "Phone", title: "Телефон", value: "+7 (800) 555-01-23", color: "text-cyan-400 bg-cyan-500/10" },
-            { icon: "Clock", title: "Режим работы", value: "Пн–Пт, 9:00–18:00", color: "text-pink-400 bg-pink-500/10" },
-            { icon: "MessageSquare", title: "Telegram", value: "@debtwiki_support", color: "text-yellow-400 bg-yellow-500/10" },
-          ].map((c, i) => (
-            <div key={i} className="glass rounded-2xl p-4 flex items-center gap-4">
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${c.color}`}>
-                <Icon name={c.icon} size={18} />
+                    {/* Ban/unban */}
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-2 font-medium">ДЕЙСТВИЯ</p>
+                      {u.is_banned ? (
+                        <button onClick={() => unban(u.id)} className="glass rounded-lg px-4 py-2 text-sm text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/10 transition-all">
+                          ✅ Разблокировать
+                        </button>
+                      ) : (
+                        <div className="flex gap-2 items-center">
+                          <input
+                            value={banReason}
+                            onChange={e => setBanReason(e.target.value)}
+                            placeholder="Причина бана..."
+                            className="glass rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-red-500/50 flex-1"
+                          />
+                          <button onClick={() => ban(u.id)} className="glass rounded-lg px-4 py-2 text-sm text-red-400 border border-red-500/20 hover:bg-red-500/10 transition-all whitespace-nowrap">
+                            🚫 Забанить
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div>
-                <p className="text-xs text-muted-foreground">{c.title}</p>
-                <p className="font-medium text-foreground">{c.value}</p>
-              </div>
-            </div>
-          ))}
-          <div className="glass rounded-2xl p-5">
-            <div className="flex items-start gap-3">
-              <Icon name="Info" size={18} className="text-cyan-400 mt-0.5 shrink-0" />
-              <div>
-                <p className="font-semibold text-sm mb-1">Часто задаваемые вопросы</p>
-                <p className="text-xs text-muted-foreground">Ответы доступны в базе знаний вики.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WikiSection() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const filtered = articles.filter(a =>
-    a.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    a.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  const categories = [...new Set(articles.map(a => a.category))];
-
-  return (
-    <div className="animate-fade-in space-y-6">
-      <h1 className="text-3xl font-black">
-        База <span className="gradient-text">знаний</span>
-      </h1>
-
-      <div className="relative">
-        <Icon name="Search" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          placeholder="Поиск по статьям..."
-          className="w-full glass-strong rounded-2xl pl-11 pr-4 py-4 text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors"
-        />
-      </div>
-
-      <div className="flex gap-2 flex-wrap">
-        {categories.map(cat => (
-          <button
-            key={cat}
-            onClick={() => setSearchQuery(cat)}
-            className="glass rounded-full px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all"
-          >
-            {cat}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        {filtered.map((a, i) => (
-          <div key={i} className="glass rounded-2xl p-5 hover:bg-white/5 transition-all duration-200 hover:scale-[1.02] cursor-pointer group">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30 text-xs">{a.category}</Badge>
-              <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
-                <Icon name="Eye" size={12} />
-                {a.reads}
-              </div>
-            </div>
-            <h3 className="font-semibold text-foreground group-hover:text-purple-300 transition-colors leading-snug">
-              {a.title}
-            </h3>
-            <div className="flex items-center gap-1 mt-3 text-xs text-cyan-400">
-              <span>Читать статью</span>
-              <Icon name="ArrowRight" size={12} />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {filtered.length === 0 && (
-        <div className="text-center py-12 text-muted-foreground">
-          <Icon name="SearchX" size={40} className="mx-auto mb-3 opacity-40" />
-          <p>Статьи не найдены</p>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
+// ─── Contacts Section ─────────────────────────────────────────────────────────
+function ContactsSection() {
+  return (
+    <div className="animate-fade-in space-y-6">
+      <h1 className="text-3xl font-black">Контакты и <span className="gradient-text">поддержка</span></h1>
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="glass-strong rounded-3xl p-6 gradient-border">
+          <h2 className="text-xl font-bold mb-4">Написать нам</h2>
+          <div className="space-y-3">
+            <input placeholder="Ваше имя" className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors" />
+            <input type="email" placeholder="Email" className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors" />
+            <textarea placeholder="Опишите вашу проблему..." rows={4} className="w-full glass rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground border border-white/8 focus:outline-none focus:border-purple-500/50 transition-colors resize-none" />
+            <Button className="w-full rounded-xl" style={{ background: "var(--gradient-main)", color: "#fff", border: "none" }}>
+              <Icon name="Send" size={16} className="mr-2" />Отправить
+            </Button>
+          </div>
+        </div>
+        <div className="space-y-4">
+          {[
+            { icon: "Mail", title: "Email", value: "support@debtwiki.ru", color: "text-purple-400 bg-purple-500/10" },
+            { icon: "Phone", title: "Телефон", value: "+7 (800) 555-01-23", color: "text-cyan-400 bg-cyan-500/10" },
+            { icon: "Clock", title: "Время работы", value: "Пн–Пт, 9:00–18:00", color: "text-pink-400 bg-pink-500/10" },
+            { icon: "MessageSquare", title: "Telegram", value: "@debtwiki_support", color: "text-yellow-400 bg-yellow-500/10" },
+          ].map((c, i) => (
+            <div key={i} className="glass rounded-2xl p-4 flex items-center gap-4">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${c.color}`}><Icon name={c.icon} size={18} /></div>
+              <div><p className="text-xs text-muted-foreground">{c.title}</p><p className="font-medium">{c.value}</p></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App Shell ────────────────────────────────────────────────────────────────
 export default function Index() {
+  const [me, setMe] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [activeSection, setActiveSection] = useState<Section>("home");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  useEffect(() => {
+    const token = localStorage.getItem('dw_token');
+    if (token) {
+      apiMe().then(res => {
+        if (res.user) setMe(res.user);
+        setAuthChecked(true);
+      }).catch(() => setAuthChecked(true));
+    } else {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  const handleLogin = (user: User) => setMe(user);
+  const handleLogout = async () => { await apiLogout(); setMe(null); };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "hsl(var(--background))" }}>
+        <div className="w-12 h-12 rounded-2xl neon-glow animate-pulse" style={{ background: "var(--gradient-main)" }} />
+      </div>
+    );
+  }
+
+  if (!me) return <LoginScreen onLogin={handleLogin} />;
+
+  const myLevel = ROLE_HIERARCHY[me.role];
+  const visibleNav = navItems.filter(n => !n.minRole || ROLE_HIERARCHY[n.minRole] <= myLevel);
+
   const sectionMap: Record<Section, React.ReactNode> = {
-    home: <HomeSection />,
-    debts: <DebtsSection />,
-    profile: <ProfileSection />,
-    admin: <AdminSection />,
+    home:     <HomeSection me={me} setSection={setActiveSection} />,
+    wiki:     <WikiSection me={me} />,
+    debts:    <DebtsSection />,
+    profile:  <ProfileSection me={me} onLogout={handleLogout} />,
+    admin:    myLevel >= 1 ? <AdminSection me={me} /> : <div className="text-muted-foreground p-8">Нет доступа</div>,
     contacts: <ContactsSection />,
-    wiki: <WikiSection />,
   };
 
   return (
@@ -524,19 +815,20 @@ export default function Index() {
       </div>
 
       <div className="flex min-h-screen relative z-10">
+        {/* Sidebar */}
         <aside className={`fixed inset-y-0 left-0 z-50 w-64 glass-strong border-r border-white/6 flex flex-col transition-transform duration-300 md:relative md:translate-x-0 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <div className="p-6 border-b border-white/6">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-black text-lg neon-glow" style={{ background: "var(--gradient-main)" }}>D</div>
               <div>
                 <p className="font-black text-foreground leading-none">DebtWiki</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Система учёта долгов</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Blox Fruits · Долги</p>
               </div>
             </div>
           </div>
 
           <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-            {navItems.map(item => {
+            {visibleNav.map(item => {
               const isActive = activeSection === item.id;
               return (
                 <button
@@ -547,9 +839,6 @@ export default function Index() {
                 >
                   <Icon name={item.icon} size={18} />
                   {item.label}
-                  {item.id === "debts" && (
-                    <span className="ml-auto bg-red-500/20 text-red-400 text-[10px] px-1.5 py-0.5 rounded-full font-bold">3</span>
-                  )}
                 </button>
               );
             })}
@@ -557,12 +846,16 @@ export default function Index() {
 
           <div className="p-4 border-t border-white/6">
             <div className="glass rounded-xl p-3 flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0" style={{ background: "var(--gradient-main)", color: "#fff" }}>А</div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-foreground truncate">Администратор</p>
-                <p className="text-[10px] text-muted-foreground truncate">Онлайн</p>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0" style={{ background: "var(--gradient-main)", color: "#fff" }}>
+                {(me.display_name || me.username)[0].toUpperCase()}
               </div>
-              <Icon name="LogOut" size={14} className="text-muted-foreground shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold truncate">{me.display_name}</p>
+                <p className="text-[10px] text-muted-foreground">{ROLE_META[me.role]?.emoji} {ROLE_META[me.role]?.label}</p>
+              </div>
+              <button onClick={handleLogout} className="text-muted-foreground hover:text-red-400 transition-colors">
+                <Icon name="LogOut" size={14} />
+              </button>
             </div>
           </div>
         </aside>
@@ -573,25 +866,16 @@ export default function Index() {
 
         <main className="flex-1 min-w-0 flex flex-col">
           <header className="sticky top-0 z-30 glass border-b border-white/6 px-6 py-4 flex items-center gap-4">
-            <button
-              onClick={() => setMobileMenuOpen(true)}
-              className="md:hidden glass rounded-lg p-2 text-muted-foreground hover:text-foreground"
-            >
+            <button onClick={() => setMobileMenuOpen(true)} className="md:hidden glass rounded-lg p-2 text-muted-foreground">
               <Icon name="Menu" size={18} />
             </button>
             <div className="flex-1">
-              <h2 className="font-semibold text-foreground">
-                {navItems.find(n => n.id === activeSection)?.label}
-              </h2>
+              <h2 className="font-semibold">{visibleNav.find(n => n.id === activeSection)?.label}</h2>
               <p className="text-xs text-muted-foreground">13 апреля 2026</p>
             </div>
             <div className="flex items-center gap-2">
-              <button className="relative glass rounded-xl p-2.5 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all">
+              <button className="glass rounded-xl p-2.5 text-muted-foreground hover:text-foreground transition-all">
                 <Icon name="Bell" size={18} />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-500" />
-              </button>
-              <button className="glass rounded-xl p-2.5 text-muted-foreground hover:text-foreground hover:bg-white/5 transition-all">
-                <Icon name="Search" size={18} />
               </button>
             </div>
           </header>

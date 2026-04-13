@@ -2,6 +2,7 @@ const URLS = {
   auth: 'https://functions.poehali.dev/7732b0ba-68d1-4714-a7b3-cf8ddab2c5af',
   wiki: 'https://functions.poehali.dev/cdbff17e-abc9-4dea-846a-934223c03a2a',
   users: 'https://functions.poehali.dev/04a0a199-dace-420b-bc39-f26061eec035',
+  debts: 'https://functions.poehali.dev/4825f70c-461d-479c-b112-e7d4b0347f2d',
 };
 
 function getToken(): string {
@@ -45,9 +46,10 @@ export async function apiLogout() {
 }
 
 // WIKI
-export async function apiGetWiki(params?: { category?: string; search?: string }) {
+export async function apiGetWiki(params?: { category?: string; subcategory?: string; search?: string }) {
   const qs = new URLSearchParams();
   if (params?.category) qs.set('category', params.category);
+  if (params?.subcategory) qs.set('subcategory', params.subcategory);
   if (params?.search) qs.set('search', params.search);
   const url = URLS.wiki + (qs.toString() ? '?' + qs.toString() : '');
   const res = await fetch(url, { headers: authHeaders() });
@@ -101,6 +103,44 @@ export async function apiUnbanUser(user_id: number) {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ user_id }),
+  });
+  return res.json();
+}
+
+// DEBTS
+export async function apiGetDebts(params?: { type?: string; closed?: boolean }) {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set('type', params.type);
+  if (params?.closed) qs.set('closed', 'true');
+  const url = URLS.debts + (qs.toString() ? '?' + qs.toString() : '');
+  const res = await fetch(url, { headers: authHeaders() });
+  return res.json();
+}
+
+export async function apiCreateDebt(data: Record<string, unknown>) {
+  const res = await fetch(URLS.debts, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function apiUpdateDebt(id: number, data: Record<string, unknown>) {
+  const res = await fetch(URLS.debts + '/debt/' + id, {
+    method: 'PUT', headers: authHeaders(), body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function apiCloseDebt(id: number) {
+  const res = await fetch(URLS.debts + '/debt/' + id + '/close', {
+    method: 'POST', headers: authHeaders(), body: '{}',
+  });
+  return res.json();
+}
+
+export async function apiReopenDebt(id: number) {
+  const res = await fetch(URLS.debts + '/debt/' + id + '/reopen', {
+    method: 'POST', headers: authHeaders(), body: '{}',
   });
   return res.json();
 }
